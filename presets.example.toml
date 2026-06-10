@@ -18,6 +18,14 @@ be-at = "+50%"
 trail-at = "+80%"
 trail = "25%"
 
+# conviction days: no target, the trail is the only upside exit — uncapped
+[moon]
+stop = "-30%"
+be-at = "+50%"
+trail-at = "+100%"
+trail = "35%"
+exit-by = "15:50"
+
 # credit spread: close at 50% of max profit, stop at 2x credit
 [spread]
 target = "+50%"
