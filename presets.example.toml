@@ -1,0 +1,23 @@
+# ttx presets — keys are the CLI flags (dashes ok), values fill in defaults.
+# Explicit CLI flags always override the preset.
+# "default" applies automatically when you pass no exit flags at all.
+
+# multi-contract playbook: scale out 2 at +60%, 1 at +100%, trail the runner
+[default]
+scale = "2@+60%,1@+100%"
+stop = "-30%"
+trail = "30%"
+exit-by = "15:50"
+
+# single contract: bracket with breakeven + trailing ratchets
+[bracket]
+target = "+100%"
+stop = "-30%"
+be-at = "+50%"
+trail-at = "+80%"
+trail = "25%"
+
+# credit spread: close at 50% of max profit, stop at 2x credit
+[spread]
+target = "+50%"
+stop = "-100%"

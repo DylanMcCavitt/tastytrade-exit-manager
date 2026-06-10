@@ -633,6 +633,19 @@ async def amain(args) -> None:
             task.cancel()
 
 
+PRESETS_PATH = os.path.expanduser(os.environ.get("TTX_PRESETS", "~/.config/ttx/presets.toml"))
+
+
+def load_preset(name: str) -> dict | None:
+    import tomllib
+    try:
+        with open(PRESETS_PATH, "rb") as f:
+            presets = tomllib.load(f)
+    except FileNotFoundError:
+        return None
+    return presets.get(name)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="manage exits on an existing tastytrade options position")
     p.add_argument("symbol", help="underlying, e.g. SPY")
@@ -642,7 +655,7 @@ def main() -> None:
     p.add_argument("--credit", help="net credit received per unit (credit spreads)")
     p.add_argument("--scale", help='scale-outs, e.g. "2@+60%%,1@+100%%"; leftover = runner')
     p.add_argument("--target", help="profit target (single bracket mode), e.g. +100%% or 2.40")
-    p.add_argument("--stop", required=True, help="initial stop, e.g. -30%%")
+    p.add_argument("--stop", help="initial stop, e.g. -30%%")
     p.add_argument("--be-after-first-scale", action="store_true", default=True,
                    help="ratchet all stops to breakeven after first scale-out fill (default on)")
     p.add_argument("--no-be", dest="be_after_first_scale", action="store_false")
@@ -662,8 +675,35 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true",
                    help="no orders sent; simulates fills from live quotes")
     p.add_argument("--yes", action="store_true", help="skip confirmation prompt")
-    args = p.parse_args()
+    p.add_argument("--preset", help=f"named preset from {PRESETS_PATH}; CLI flags override."
+                   " With no exit flags at all, the 'default' preset applies automatically")
 
+    # presets fill in defaults before parsing, so explicit flags always win
+    argv_flags = {a.split("=", 1)[0] for a in sys.argv[1:] if a.startswith("--")}
+    preset_name = None
+    if "--preset" in argv_flags:
+        pre = argparse.ArgumentParser(add_help=False)
+        pre.add_argument("--preset")
+        preset_name = pre.parse_known_args()[0].preset
+    elif not argv_flags & {"--scale", "--target", "--trail", "--stop"}:
+        preset_name = "default"
+    if preset_name:
+        preset = load_preset(preset_name)
+        if preset is None and preset_name != "default":
+            p.error(f"preset '{preset_name}' not found in {PRESETS_PATH}")
+        if preset:
+            mapped = {k.replace("-", "_"): v for k, v in preset.items()}
+            bad = mapped.keys() - {a.dest for a in p._actions}
+            if bad:
+                p.error(f"preset '{preset_name}': unknown keys {sorted(bad)}")
+            p.set_defaults(**mapped)
+
+    args = p.parse_args()
+    if preset_name and preset:
+        log(f"preset '{preset_name}' ({PRESETS_PATH})")
+
+    if not args.stop:
+        p.error("--stop is required (as a flag or from a preset)")
     if not args.scale and not args.target and not args.trail:
         p.error("give --scale, or --target, or --trail (pure runner)")
 

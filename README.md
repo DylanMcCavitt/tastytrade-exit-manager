@@ -28,6 +28,36 @@ and ratchets the exit orders.
 
 Requires [uv](https://docs.astral.sh/uv/) — deps are inline, no install step.
 
+Optional: install it as a short command and set up presets:
+
+```sh
+chmod +x runner_manager.py
+ln -s "$(pwd)/runner_manager.py" ~/.local/bin/ttx   # any name, any dir on PATH
+mkdir -p ~/.config/ttx && cp presets.example.toml ~/.config/ttx/presets.toml
+```
+
+## Fast path: presets
+
+Presets are named flag bundles in `~/.config/ttx/presets.toml` (see
+`presets.example.toml`; override the location with `TTX_PRESETS`). The
+`default` preset applies automatically when you pass **no** exit flags, so
+managing a fresh fill is just:
+
+```sh
+ttx SPY
+```
+
+Named presets via `--preset`; explicit flags override preset values:
+
+```sh
+ttx SPY --preset spread
+ttx SPY --preset default --trail 25%
+```
+
+Passing any exit flag (`--scale`/`--target`/`--trail`/`--stop`) without
+`--preset` skips presets entirely — one-off commands never silently inherit
+preset values.
+
 ## Usage
 
 4 contracts long, sell 2 at +60%, 1 at +100%, trail the last one 30% below
