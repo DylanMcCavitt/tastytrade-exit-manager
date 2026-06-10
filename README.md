@@ -1,4 +1,4 @@
-# runner-manager
+# tastytrade-exit-manager
 
 Manages exits on an **existing** tastytrade options position. Never opens
 positions, never adds size. You enter the trade in the app; this script places
