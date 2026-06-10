@@ -100,6 +100,27 @@ Debit spread: same as singles but use `--entry` for the net debit. Percent
 levels are % of basis (debit paid, or credit received = % of max profit).
 A bare number is an absolute net price instead.
 
+### Exits compose
+
+`--stop`, `--target`, `--trail`, `--scale` are all optional and combine freely —
+whatever you omit simply isn't placed:
+
+```sh
+ttx SPY --stop -30%              # just a resting stop, upside open
+ttx SPY --target .40             # just a profit cap (lotto: full debit at risk)
+ttx SPY --trail 25%              # pure trail; the stop appears once it arms
+ttx SPY --target +200% --trail 30%   # cap plus trail, no initial stop
+```
+
+When several legs share an expiry (e.g. two long calls at different strikes),
+`--strike` / `--right` pick which to manage instead of treating them as one
+combo:
+
+```sh
+ttx QQQ --strike 725 --stop -20% --target +100%
+ttx QQQ --right P --trail 25%        # all the puts, none of the calls
+```
+
 Scale quantities can also be percentages of the position —
 `--scale "50%@+60%,25%@+100%"` — floored per tranche, zero-quantity tranches
 skipped, leftover is still the runner. That's what makes a preset work at any

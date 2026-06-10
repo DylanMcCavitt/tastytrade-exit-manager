@@ -171,7 +171,7 @@ class Bracket:
     name: str
     units: int
     target_pnl: Decimal | None
-    stop_pnl: Decimal
+    stop_pnl: Decimal | None
     soft_stop: bool
     complex_id: int | None = None
     target_oid: int | None = None
@@ -241,12 +241,15 @@ class Manager:
     async def _place_bracket(self, br: Bracket) -> None:
         ctx = self.ctx
         tgt = f"target {ctx.fmt_pnl(br.target_pnl)}" if br.target_pnl is not None else "no target"
-        stp = f"stop {ctx.fmt_pnl(br.stop_pnl)}" + (" [software]" if br.soft_stop else "")
+        if br.stop_pnl is None:
+            stp = "no stop" + (" (trail places one when armed)" if self.args.trail else "")
+        else:
+            stp = f"stop {ctx.fmt_pnl(br.stop_pnl)}" + (" [software]" if br.soft_stop else "")
         log(f"[{br.name}] x{br.units}: {tgt}, {stp}")
         if self.dry:
             log(f"[{br.name}] DRY RUN -- orders not sent")
             return
-        if br.target_pnl is not None and not br.soft_stop:
+        if br.target_pnl is not None and br.stop_pnl is not None and not br.soft_stop:
             oco = NewComplexOrder(orders=[
                 self._limit(br.units, br.target_pnl),
                 self._stop(br.units, br.stop_pnl),
@@ -267,7 +270,9 @@ class Manager:
                     self.session, self._limit(br.units, br.target_pnl), dry_run=False)
                 br.target_oid = self._oid(resp)
                 log(f"[{br.name}] target limit placed (#{br.target_oid})")
-            if not br.soft_stop:
+            if br.stop_pnl is None:
+                pass  # nothing to rest; trail/breakeven may place a stop later
+            elif not br.soft_stop:
                 resp = await self.account.place_order(
                     self.session, self._stop(br.units, br.stop_pnl), dry_run=False)
                 br.stop_oid = self._oid(resp)
@@ -276,11 +281,12 @@ class Manager:
                 log(f"[{br.name}] software stop armed at {ctx.fmt_pnl(br.stop_pnl)}")
 
     async def _raise_stop(self, br: Bracket, new_pnl: Decimal, why: str) -> None:
-        if br.done or new_pnl <= br.stop_pnl:
+        if br.done or (br.stop_pnl is not None and new_pnl <= br.stop_pnl):
             return
         old = br.stop_pnl
         br.stop_pnl = new_pnl
-        msg = f"[{br.name}] stop {self.ctx.fmt_pnl(old)} -> {self.ctx.fmt_pnl(new_pnl)} ({why})"
+        old_s = self.ctx.fmt_pnl(old) if old is not None else "--"
+        msg = f"[{br.name}] stop {old_s} -> {self.ctx.fmt_pnl(new_pnl)} ({why})"
         if self.dry or br.soft_stop:
             log(("DRY RUN " if self.dry else "") + msg)
             notify(msg)
@@ -295,6 +301,11 @@ class Manager:
             resp = await self.account.replace_order(
                 self.session, br.stop_oid, self._stop(br.units, new_pnl))
             br.stop_oid = self._oid(resp) or br.stop_oid
+        else:
+            # bracket had no stop until now (trail/breakeven created one)
+            resp = await self.account.place_order(
+                self.session, self._stop(br.units, new_pnl), dry_run=False)
+            br.stop_oid = self._oid(resp)
         log(msg)
         notify(msg)
 
@@ -411,7 +422,7 @@ class Manager:
                 if self.dry and pnl is not None:
                     if br.target_pnl is not None and pnl >= br.target_pnl:
                         br.done, br.exit_reason = True, "target (sim)"
-                    elif pnl <= br.stop_pnl:
+                    elif br.stop_pnl is not None and pnl <= br.stop_pnl:
                         br.done, br.exit_reason = True, "stop (sim)"
                     if br.done:
                         log(f"[{br.name}] SIM FILL: {br.exit_reason} at pnl {ctx.fmt_pnl(pnl)}")
@@ -424,8 +435,12 @@ class Manager:
                     if br.done:
                         log(f"[{br.name}] {br.exit_reason}")
                         notify(f"{br.name}: {br.exit_reason}")
+                        if br.complex_id is None and br.target_oid and br.stop_oid:
+                            # standalone pair (not OCO): cancel the surviving sibling
+                            await self._cancel_bracket(br)
                 # software stop trigger
                 if (not br.done and br.soft_stop and not self.dry
+                        and br.stop_pnl is not None
                         and pnl is not None and pnl <= br.stop_pnl):
                     log(f"[{br.name}] software stop hit at {ctx.fmt_pnl(pnl)}")
                     await self.flatten([br], f"{br.name} software stop")
@@ -460,7 +475,8 @@ class Manager:
                     high_value = ctx.basis + self.high_pnl if not ctx.is_credit else ctx.basis
                     desired = self.high_pnl - trail_frac * high_value
                     now = asyncio.get_event_loop().time()
-                    if (desired > trail_target.stop_pnl + TRAIL_MIN_DELTA
+                    cur_stop = trail_target.stop_pnl
+                    if ((cur_stop is None or desired > cur_stop + TRAIL_MIN_DELTA)
                             and now - self.last_trail_move >= TRAIL_MIN_SECS):
                         self.last_trail_move = now
                         await self._raise_stop(trail_target, desired,
@@ -508,10 +524,20 @@ async def build_ctx(args, session: Session, account: Account) -> Ctx:
         and "OPTION" in str(getattr(p, "instrument_type", "")).upper().replace(" ", "_")
         and occ_expiry(p.symbol) == exp
     ]
+    # OCC symbol tail: [C|P] + 8-digit strike*1000, e.g. ...C00725000
+    if args.strike:
+        wanted = {d(s) for s in args.strike.split(",")}
+        legs_raw = [p for p in legs_raw if Decimal(p.symbol[-8:]) / 1000 in wanted]
+    if args.right:
+        r = args.right.strip().upper()[0]
+        legs_raw = [p for p in legs_raw if p.symbol[-9].upper() == r]
     if not legs_raw:
         found = sorted({(p.underlying_symbol, occ_expiry(p.symbol)) for p in positions
                         if occ_expiry(p.symbol)})
-        log(f"no {args.symbol} option position expiring {exp}. open option positions: {found}")
+        filt = "".join([f" strike {args.strike}" if args.strike else "",
+                        f" right {args.right}" if args.right else ""])
+        log(f"no {args.symbol} option position expiring {exp}{filt}."
+            f" open option positions: {found}")
         sys.exit(1)
 
     signed = []
@@ -567,10 +593,10 @@ def build_brackets(args, ctx: Ctx, mgr: Manager) -> None:
         log(f"1 lot detected -> preset '{one_lot}'")
 
     soft = args.soft_stop or len(ctx.legs) > 1
-    if soft and len(ctx.legs) > 1:
+    if soft and len(ctx.legs) > 1 and args.stop:
         log("spread detected: stop will be SOFTWARE-managed (keep this script alive);"
             " profit targets rest at the broker")
-    stop_pnl = ctx.parse_level(args.stop)
+    stop_pnl = ctx.parse_level(args.stop) if args.stop else None
 
     if args.scale:
         scaled = 0
@@ -633,9 +659,12 @@ async def amain(args) -> None:
                    f" (sell @{round_tick(ctx.pnl_to_price(br.target_pnl), ctx.tick)})")
         else:
             tgt = "--"
-        stop_trig = round_tick(ctx.pnl_to_price(br.stop_pnl), ctx.tick)
-        log(f"plan [{br.name}] x{br.units}  target {tgt}"
-            f"  stop {ctx.fmt_pnl(br.stop_pnl)} (trigger @{stop_trig})")
+        if br.stop_pnl is not None:
+            stop_trig = round_tick(ctx.pnl_to_price(br.stop_pnl), ctx.tick)
+            stp = f"{ctx.fmt_pnl(br.stop_pnl)} (trigger @{stop_trig})"
+        else:
+            stp = "--"
+        log(f"plan [{br.name}] x{br.units}  target {tgt}  stop {stp}")
     if not args.yes:
         if input("proceed? [yes/no] ").strip().lower() not in ("y", "yes"):
             sys.exit(0)
@@ -664,7 +693,7 @@ async def amain(args) -> None:
         pnl = ctx.pnl()
         if not args.dry_run and pnl is not None:
             for br in mgr._all():
-                if pnl <= br.stop_pnl:
+                if br.stop_pnl is not None and pnl <= br.stop_pnl:
                     trig = round_tick(ctx.pnl_to_price(br.stop_pnl), ctx.tick)
                     log(f"mark {ctx.mark()} is already through the [{br.name}] stop"
                         f" trigger ({trig}, {ctx.fmt_pnl(br.stop_pnl)}). nothing placed."
@@ -723,12 +752,15 @@ def main() -> None:
     p.add_argument("symbol", help="underlying, e.g. SPY")
     p.add_argument("--exp", help="expiration YYYY-MM-DD (default: today / 0DTE)")
     p.add_argument("--qty", type=int, help="units to manage (default: full position)")
+    p.add_argument("--strike", help="only manage legs at these strikes, e.g. 715 or 714,715")
+    p.add_argument("--right", help="only manage calls (C) or puts (P)")
     p.add_argument("--entry", help="net debit paid per unit (overrides detected basis)")
     p.add_argument("--credit", help="net credit received per unit (credit spreads)")
     p.add_argument("--scale", help='scale-outs as counts or %% of position, e.g. "2@+60%%,1@+100%%"'
                    ' or "50%%@+60%%,25%%@+100%%" (floored; 0-qty tranches skipped); leftover = runner')
-    p.add_argument("--target", help="profit target (single bracket mode), e.g. +100%% or 2.40")
-    p.add_argument("--stop", help="initial stop, e.g. -30%%")
+    p.add_argument("--target", help="profit target, e.g. +100%% or 2.40; combine freely with"
+                   " --stop/--trail or use alone")
+    p.add_argument("--stop", help="initial stop, e.g. -30%%; optional -- omit for no stop")
     p.add_argument("--be-after-first-scale", action="store_true", default=True,
                    help="ratchet all stops to breakeven after first scale-out fill (default on)")
     p.add_argument("--no-be", dest="be_after_first_scale", action="store_false")
@@ -787,10 +819,9 @@ def main() -> None:
     if preset_name and preset:
         log(f"preset '{preset_name}' ({PRESETS_PATH})")
 
-    if not args.stop:
-        p.error("--stop is required (as a flag or from a preset)")
-    if not args.scale and not args.target and not args.trail:
-        p.error("give --scale, or --target, or --trail (pure runner)")
+    if not (args.scale or args.target or args.trail or args.stop):
+        p.error("give at least one exit: --scale, --target, --stop, or --trail"
+                " (combine freely; omitted parts are simply not placed)")
 
     try:
         asyncio.run(amain(args))
