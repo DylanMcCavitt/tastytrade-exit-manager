@@ -551,6 +551,20 @@ async def build_ctx(args, session: Session, account: Account) -> Ctx:
 
 
 def build_brackets(args, ctx: Ctx, mgr: Manager) -> None:
+    # preset redirect for single-contract single-leg positions: scale-outs make
+    # no sense on 1 unit, so swap in the designated bracket-style preset.
+    # CLI-explicit flags still win over the redirected preset's values.
+    one_lot = getattr(args, "one_lot_preset", None)
+    if one_lot and ctx.units == 1 and len(ctx.legs) == 1:
+        explicit = getattr(args, "cli_flags", set())
+        sub = load_preset(one_lot) or {}
+        if "--scale" not in explicit:
+            args.scale = None
+        for k, v in sub.items():
+            if f"--{k}" not in explicit:
+                setattr(args, k.replace("-", "_"), v)
+        log(f"1 lot detected -> preset '{one_lot}'")
+
     soft = args.soft_stop or len(ctx.legs) > 1
     if soft and len(ctx.legs) > 1:
         log("spread detected: stop will be SOFTWARE-managed (keep this script alive);"
@@ -695,18 +709,30 @@ def main() -> None:
         preset_name = pre.parse_known_args()[0].preset
     elif not argv_flags & {"--scale", "--target", "--trail", "--stop"}:
         preset_name = "default"
+    one_lot = None
     if preset_name:
         preset = load_preset(preset_name)
         if preset is None and preset_name != "default":
             p.error(f"preset '{preset_name}' not found in {PRESETS_PATH}")
         if preset:
             mapped = {k.replace("-", "_"): v for k, v in preset.items()}
-            bad = mapped.keys() - {a.dest for a in p._actions}
+            one_lot = mapped.pop("one_lot", None)
+            dests = {a.dest for a in p._actions}
+            bad = mapped.keys() - dests
             if bad:
                 p.error(f"preset '{preset_name}': unknown keys {sorted(bad)}")
+            if one_lot:
+                sub = load_preset(one_lot)
+                if sub is None:
+                    p.error(f"one-lot preset '{one_lot}' not found in {PRESETS_PATH}")
+                bad = {k.replace("-", "_") for k in sub} - dests
+                if bad:
+                    p.error(f"preset '{one_lot}': unknown keys {sorted(bad)}")
             p.set_defaults(**mapped)
 
     args = p.parse_args()
+    args.one_lot_preset = one_lot
+    args.cli_flags = argv_flags
     if preset_name and preset:
         log(f"preset '{preset_name}' ({PRESETS_PATH})")
 

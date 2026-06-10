@@ -58,6 +58,12 @@ Passing any exit flag (`--scale`/`--target`/`--trail`/`--stop`) without
 `--preset` skips presets entirely — one-off commands never silently inherit
 preset values.
 
+A preset can name a `one-lot` preset to use instead when the detected position
+is a single contract on a single leg (scale-outs need more than 1 unit):
+`one-lot = "bracket"` swaps in the bracket preset's target/breakeven/trail
+ladder while keeping the rest (e.g. `exit-by`) from the original preset.
+CLI flags still override.
+
 ## Usage
 
 4 contracts long, sell 2 at +60%, 1 at +100%, trail the last one 30% below

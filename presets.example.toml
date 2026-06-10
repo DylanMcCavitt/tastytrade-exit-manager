@@ -8,6 +8,7 @@ scale = "50%@+60%,25%@+100%"
 stop = "-30%"
 trail = "30%"
 exit-by = "15:50"
+one-lot = "bracket"  # 1-contract positions use this preset instead (scale-outs need >1)
 
 # single contract: bracket with breakeven + trailing ratchets
 [bracket]
