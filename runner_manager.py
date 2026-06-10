@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 
 from tastytrade import Account, DXLinkStreamer, Session
 from tastytrade.dxfeed import Quote
+from tastytrade.utils import TastytradeError
 from tastytrade.instruments import Option
 from tastytrade.order import (
     NewComplexOrder,
@@ -621,8 +622,14 @@ async def amain(args) -> None:
     build_brackets(args, ctx, mgr)
 
     for br in mgr._all():
-        tgt = ctx.fmt_pnl(br.target_pnl) if br.target_pnl is not None else "--"
-        log(f"plan [{br.name}] x{br.units}  target {tgt}  stop {ctx.fmt_pnl(br.stop_pnl)}")
+        if br.target_pnl is not None:
+            tgt = (f"{ctx.fmt_pnl(br.target_pnl)}"
+                   f" (sell @{round_tick(ctx.pnl_to_price(br.target_pnl), ctx.tick)})")
+        else:
+            tgt = "--"
+        stop_trig = round_tick(ctx.pnl_to_price(br.stop_pnl), ctx.tick)
+        log(f"plan [{br.name}] x{br.units}  target {tgt}"
+            f"  stop {ctx.fmt_pnl(br.stop_pnl)} (trigger @{stop_trig})")
     if not args.yes:
         if input("proceed? [yes/no] ").strip().lower() not in ("y", "yes"):
             sys.exit(0)
@@ -646,10 +653,28 @@ async def amain(args) -> None:
             sys.exit(1)
         log(f"mark {ctx.mark()}  pnl {ctx.fmt_pnl(ctx.pnl())}")
 
+        # refuse to place a stop the market is already through -- the broker
+        # rejects it ("would execute immediately") and the position stays naked
+        pnl = ctx.pnl()
+        if not args.dry_run and pnl is not None:
+            for br in mgr._all():
+                if pnl <= br.stop_pnl:
+                    trig = round_tick(ctx.pnl_to_price(br.stop_pnl), ctx.tick)
+                    log(f"mark {ctx.mark()} is already through the [{br.name}] stop"
+                        f" trigger ({trig}, {ctx.fmt_pnl(br.stop_pnl)}). nothing placed."
+                        " close the position manually or rerun with a wider --stop.")
+                    notify("stop already breached -- nothing placed")
+                    sys.exit(1)
+
         try:
             await mgr.run()
         except KeyboardInterrupt:
             raise
+        except TastytradeError as e:
+            log(f"broker rejected an order: {e}")
+            log("check the app for any resting orders before re-running")
+            notify("order rejected -- check the app")
+            sys.exit(1)
         finally:
             task.cancel()
 
