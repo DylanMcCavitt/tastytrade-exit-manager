@@ -93,6 +93,11 @@ Debit spread: same as singles but use `--entry` for the net debit. Percent
 levels are % of basis (debit paid, or credit received = % of max profit).
 A bare number is an absolute net price instead.
 
+Scale quantities can also be percentages of the position —
+`--scale "50%@+60%,25%@+100%"` — floored per tranche, zero-quantity tranches
+skipped, leftover is still the runner. That's what makes a preset work at any
+size: 4 contracts → 2/1/1-runner, 2 → 1/1-runner, 1 → pure runner on the trail.
+
 Defaults: `--exp` today (0DTE), quantity/basis auto-detected from the position
 (override with `--entry`/`--credit` — average open price from the API is
 worth double-checking).

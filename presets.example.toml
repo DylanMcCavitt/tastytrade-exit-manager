@@ -2,9 +2,9 @@
 # Explicit CLI flags always override the preset.
 # "default" applies automatically when you pass no exit flags at all.
 
-# multi-contract playbook: scale out 2 at +60%, 1 at +100%, trail the runner
+# any size: sell half at +60%, a quarter at +100%, trail the rest (floored per tranche)
 [default]
-scale = "2@+60%,1@+100%"
+scale = "50%@+60%,25%@+100%"
 stop = "-30%"
 trail = "30%"
 exit-by = "15:50"

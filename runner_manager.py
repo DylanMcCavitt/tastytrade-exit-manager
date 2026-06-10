@@ -561,7 +561,14 @@ def build_brackets(args, ctx: Ctx, mgr: Manager) -> None:
         scaled = 0
         for i, part in enumerate(args.scale.split(","), 1):
             qty_s, level = part.split("@")
-            qty = int(qty_s)
+            qty_s = qty_s.strip()
+            if qty_s.endswith("%"):
+                qty = int(ctx.units * Decimal(qty_s[:-1]) / 100)  # floor
+            else:
+                qty = int(qty_s)
+            if qty <= 0:
+                log(f"T{i} ({part.strip()}): {qty_s} of {ctx.units} rounds to 0 -- skipped")
+                continue
             scaled += qty
             mgr.brackets.append(Bracket(
                 name=f"T{i}", units=qty, soft_stop=soft,
@@ -653,7 +660,8 @@ def main() -> None:
     p.add_argument("--qty", type=int, help="units to manage (default: full position)")
     p.add_argument("--entry", help="net debit paid per unit (overrides detected basis)")
     p.add_argument("--credit", help="net credit received per unit (credit spreads)")
-    p.add_argument("--scale", help='scale-outs, e.g. "2@+60%%,1@+100%%"; leftover = runner')
+    p.add_argument("--scale", help='scale-outs as counts or %% of position, e.g. "2@+60%%,1@+100%%"'
+                   ' or "50%%@+60%%,25%%@+100%%" (floored; 0-qty tranches skipped); leftover = runner')
     p.add_argument("--target", help="profit target (single bracket mode), e.g. +100%% or 2.40")
     p.add_argument("--stop", help="initial stop, e.g. -30%%")
     p.add_argument("--be-after-first-scale", action="store_true", default=True,
