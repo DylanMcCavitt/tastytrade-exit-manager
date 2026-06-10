@@ -24,6 +24,7 @@ and ratchets the exit orders.
    ```sh
    export TT_CLIENT_SECRET="..."
    export TT_REFRESH_TOKEN="..."
+   export TT_ACCOUNT="5WT00000"   # optional: default account (else: first account)
    ```
 
 Requires [uv](https://docs.astral.sh/uv/) — deps are inline, no install step.

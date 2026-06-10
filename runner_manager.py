@@ -612,8 +612,14 @@ async def amain(args) -> None:
         sys.exit(1)
     session = Session(secret, token, is_test=args.sandbox)
     accounts = await Account.get(session)
-    account = next((a for a in accounts if a.account_number == args.account), accounts[0]) \
-        if args.account else accounts[0]
+    acct_no = args.account or os.environ.get("TT_ACCOUNT")
+    account = accounts[0]
+    if acct_no:
+        account = next((a for a in accounts if a.account_number == acct_no), None)
+        if account is None:
+            log(f"account {acct_no} not found; available:"
+                f" {[a.account_number for a in accounts]}")
+            sys.exit(1)
     log(f"account {account.account_number}{' [SANDBOX]' if args.sandbox else ''}"
         f"{' [DRY RUN]' if args.dry_run else ''}")
 
@@ -692,7 +698,27 @@ def load_preset(name: str) -> dict | None:
     return presets.get(name)
 
 
+LEVEL_FLAGS = {"--stop", "--target", "--be-at", "--trail-at", "--entry", "--credit",
+               "--und-below", "--und-above"}
+
+
+def merge_negative_values(argv: list[str]) -> list[str]:
+    """argparse reads '--stop -100%' as two flags; rewrite to '--stop=-100%'."""
+    out, i = [], 0
+    while i < len(argv):
+        a, nxt = argv[i], argv[i + 1] if i + 1 < len(argv) else ""
+        if (a in LEVEL_FLAGS and len(nxt) > 1 and nxt[0] == "-"
+                and (nxt[1].isdigit() or nxt[1] == ".")):
+            out.append(f"{a}={nxt}")
+            i += 2
+        else:
+            out.append(a)
+            i += 1
+    return out
+
+
 def main() -> None:
+    sys.argv[1:] = merge_negative_values(sys.argv[1:])
     p = argparse.ArgumentParser(description="manage exits on an existing tastytrade options position")
     p.add_argument("symbol", help="underlying, e.g. SPY")
     p.add_argument("--exp", help="expiration YYYY-MM-DD (default: today / 0DTE)")
